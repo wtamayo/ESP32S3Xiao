@@ -13,7 +13,7 @@
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 #include <SPI.h>
-
+#include <LittleFS.h>
 // FreeRTOS Includes
 #include "freertos/FreeRTOS.h"
 #include "freertos/FreeRTOSConfig.h"
@@ -27,18 +27,47 @@
 //  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
 //};
 
-uint8_t mac[6];
+// Xiao SPI PIN remapping SCK, MISO, MOSI, SS
+#define SCK_PIN    D8
+#define MISO_PIN   D9
+#define MOSI_PIN   D10
+#define SS_PIN     D0
 
-IPAddress ip(192, 168, 1, 177);
+static const int spiClk = 1000000; 
 
-unsigned int localPort = 8888;      // local port to listen on
+static uint8_t mac[6];
+
+IPAddress WindowsIP(192, 168, 1, 100);
+IPAddress localIP(192, 168, 1, 101);
+IPAddress remoteIP = IPAddress();
+static const char* hostname= "akbarge";
+
+static uint16_t localPort = 8888;      // local port to listen on
+static uint16_t remotePort;
+static uint16_t WindowsPort = 9999;
+
 
 // buffers for receiving and sending data
 char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  // buffer to hold incoming packet,
-char ReplyBuffer[] = "acknowledged";        // a string to send back
+char replyBuffer[] = "ACK";        // a string to send back
 
 // An EthernetUDP instance to let us send and receive packets over UDP
-EthernetUDP Udp;
+EthernetUDP udpRx;
+EthernetUDP udpTx;
+
+typedef enum {
+  disable,
+  enable,
+  connected,
+  disconnected,
+  error
+} Status_t;
+
+struct netStatus {
+  Status_t enWiFiSTA = disable;
+  Status_t enWiFiAP  = disable;
+  Status_t enEth     = disable;
+} netsta;
 
 /***** FreeRTOS util defines *****/
 #define DELAY1 250
@@ -120,7 +149,12 @@ HardwareSerial SerialRS232(0);     // UART (RS-232)
 
 /****** Files System (move) ******/
 
-/* Style */
+const char *fLogin  = "/server/login.html";
+const char *fUpload = "/server/upload.html";
+const char *fController = "/stw/samplestw.hex";
+
+
+
 String style =
 "<style>#file-input,input{width:100%;height:44px;border-radius:4px;margin:10px auto;font-size:15px}"
 "input{background:#f1f1f1;border:0;padding:0 15px}body{background:#3498db;font-family:sans-serif;font-size:14px;color:#777}"
@@ -129,7 +163,7 @@ String style =
 "form{background:#fff;max-width:258px;margin:75px auto;padding:30px;border-radius:5px;text-align:center}"
 ".btn{background:#3498db;color:#fff;cursor:pointer}</style>";
 
-/* Login page */
+/*
 String loginIndex = 
 "<form name=loginForm>"
 "<h1>Couer Barge Login</h1>"
@@ -145,7 +179,6 @@ String loginIndex =
 "}"
 "</script>" + style;
 
-/* Server Index Page */
 String serverIndex = 
 "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
 "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
@@ -189,7 +222,7 @@ String serverIndex =
 "});"
 "});"
 "</script>" + style;
-
+*/
 
 String uploadIndex = 
 "<body>"
@@ -298,7 +331,6 @@ void writerTask3(void *pvParameters ) {
   }
 }
 
-
 // Add more tasks here
 #endif
 
@@ -318,7 +350,7 @@ void heartBeatTask(void *pvParameters ) {
 void initWifiAP()
 {
     WiFi.softAP(ssidAP, passwordAP);
-    Serial.print("AP IP address: ");
+    Serial.print("WiFi AP IP address: ");
     Serial.println(WiFi.softAPIP());
 
     if (!MDNS.begin(host)) { //http://esp32.local
@@ -331,91 +363,24 @@ void initWifiAP()
     
 }
 
-/*
-void index(Request &req, Response &res)
-{
-  res.set("Content-Type", "text/html");
-  //res.println(uploadIndex);
-  res.println("<html>");
-  res.println("<body>");
-  //res.println("  <h1>");
-  //res.println("    Compiled: " __DATE__ " " __TIME__);
-  //res.println("  </h1>");
-  
-  res.println("  <form id='form'>");
-  res.println("    <input id='file' type='file'>");
-  res.println("    <input type='submit' value='Send' />");
-  res.println("  </form>");
-  res.println("</body>");
-  
-  res.println("<script>");
-  res.println("  const form = document.getElementById('form');");
-  res.println("  form.onsubmit = function(e) {");
-  res.println("    e.preventDefault();");
-  res.println("    const body = document.getElementById('file').files[0];");
-  res.println("    fetch('/update', { method: 'POST', body }).then((response) => {");
-  res.println("      if (!response.ok) {");
-  res.println("        return alert('File upload failed');");
-  res.println("      }");
-  res.println("      alert('File upload succeeded');");
-  res.println("    });");
-  res.println("  }");
-  res.println("</script>");
-  
-  res.println("</html>");
-}
-
-void update(Request &req, Response &res) 
-{
-  int contentLength = req.left();
-
-  if (strcmp(req.get("Expect"), "100-continue") == 0) {
-    res.status(100);
-  }
-
-  if (!Update.begin(contentLength)) {
-    res.status(500);
-    return Update.printError(req);
-  }
-
-  unsigned long start = millis();
-  while (!req.available() && millis() - start <= 5000) {}
-
-  if (!req.available()) {
-    return res.sendStatus(408);
-  }
-
-  if (Update.writeStream(req) != contentLength) {
-    res.status(400);
-    return Update.printError(req);
-  }
-
-  if (!Update.end(true)) {
-    res.status(500);
-    return Update.printError(req);
-  }
-
-  shouldRestart = true;
-  res.sendStatus(204);
-}
-
-void initWiFiServer()
-{
-  WiFi_WebApp.header("Expect", expectHeader, 20);
-  WiFi_WebApp.get("/", &index);  // Done in GNSS-RTK by main config portal
-  WiFi_WebApp.post("/update", &update);  // Thia is new for GNSS-RTK, handle fw update
-  server.begin();
-}
-*/
 
 void hServerLogin() {
-  wserver.sendHeader("Connection", "close");
-  wserver.send(200, "text/html", loginIndex);
+  wserver.sendHeader("Connection", "close");  
+  // inline read file
+  File file = LittleFS.open(fLogin, "r");
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {
+    while (file.available()) {      
+      wserver.send(200, "text/html", file.readString());         
+    }
+    file.close();
+  }
 }
 
 void hServerIndex() {
   wserver.sendHeader("Connection", "close");
-  wserver.send(200, "text/html", uploadIndex);
+  wserver.send(200, "text/html", fUpload);
 }
 
 void hServerUpdate() {
@@ -448,69 +413,163 @@ void hServerUpload() {
 void initWebServer()
 {
   wserver.on("/", HTTP_GET, hServerLogin); 
-  wserver.on("/serverIndex", HTTP_GET, hServerIndex);
+  wserver.on("/index", HTTP_GET, hServerIndex);
   wserver.on("/update", HTTP_POST, hServerUpdate, hServerUpload);
   wserver.begin();
+}
+
+
+void initSPI()
+{
+  // Manual pin reasignment for Xiao - clk, miso, mosi, ss
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN);
+// Set Slave Select mode.
+  pinMode(SPI.pinSS(),OUTPUT);
+
+  /*
+  Serial.print("MOSI: ");
+  Serial.println(MOSI);
+  Serial.print("MISO: ");
+  Serial.println(MISO);
+  Serial.print("SCK: ");
+  Serial.println(SCK);
+  Serial.print("SS: ");
+  Serial.println(SS); 
+  Serial.print("SPI SS: GPIO");
+  Serial.println(SPI.pinSS());  
+  */
+}
+
+void spiCommand(byte data) 
+{
+  //use it as you would the regular arduino SPI API
+  SPI.beginTransaction(SPISettings(spiClk, MSBFIRST, SPI_MODE0));
+  digitalWrite(SPI.pinSS(), LOW);   //pull SS slow to prep other end for transfer
+  SPI.transfer(data);
+  digitalWrite(SPI.pinSS(), HIGH);  //pull ss high to signify end of data transfer
+  SPI.endTransaction();
 }
 
 void initEth() 
 {
   esp_efuse_mac_get_default(mac);
-  // Manual pin setup - clk, miso, mosi, ss
-  //SPI.begin();
-  Ethernet.init(5);
-  Ethernet.begin(mac, ip);
-
-  // Open serial communications and wait for port to open:
-  Serial.begin(9600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
+  Ethernet.init(SPI.pinSS());
+  Ethernet.begin(mac, localIP);
 
   // Check for Ethernet hardware present
   if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
-    while (true) {
-      delay(1); // do nothing, no point running without Ethernet hardware
-    }
+      Serial.println("Ethernet device not found. Can't run without hardware.");
+      netsta.enEth = error;
+      return;
+  } else {
+      netsta.enEth = enable;
   }
-  if (Ethernet.linkStatus() == LinkOFF) {
-    Serial.println("Ethernet cable is not connected.");
+  if (Ethernet.linkStatus() == LinkON) {
+      netsta.enEth = connected;
+      Serial.print("Ethernet Started on Gateway:");  
+      Serial.print(Ethernet.gatewayIP());
+      Serial.print("and IP:");
+      Serial.println(Ethernet.localIP());
+  } else {
+      Serial.println("Ethernet cable is not connected.");
+      netsta.enEth = disconnected;
   }
 
   // start UDP
-  Udp.begin(localPort);
+  udpRx.begin(localPort);
+  udpTx.begin(remotePort);
+  Serial.print("UDP service on:");  
+  Serial.println(udpRx.localPort());
+
+  // Give device a hostname so webpage can be easier to access
+  if (!MDNS.begin(hostname)) {                          
+      Serial.println("Error starting mDNS \n");
+  } else {
+      Serial.println( "Access " + String(hostname) + ".local/ or the IP address into a browser to access portal. \n");
+  }
 }
 
 
-void mUpd() 
+void readUdp() 
 {
   // if there's data available, read a packet
-  Serial.println("Manading UDP");
-
-  int packetSize = Udp.parsePacket();
-  if (packetSize) {
+  int packetSize = udpRx.parsePacket();       
+      
+  if ((netsta.enEth == connected) && packetSize) {
       Serial.print("Received packet of size ");
       Serial.println(packetSize);
       Serial.print("From ");
-      IPAddress remote = Udp.remoteIP();
+
+      // Identify remote IP
+      remoteIP = udpRx.remoteIP();
       for (int i=0; i < 4; i++) {
-           Serial.print(remote[i], DEC);
+           Serial.print(remoteIP[i], DEC);
            if (i < 3) Serial.print(".");
       }
+
+      // Identify remote port
       Serial.print(", port ");
-      Serial.println(Udp.remotePort());
+      remotePort = udpRx.remotePort();
+      Serial.println(remotePort);
 
       // read the packet into packetBuffer
-      Udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
-      Serial.println("Contents:");
+      udpRx.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
+      Serial.print("Contents: ");
       Serial.println(packetBuffer);
+      
+      // Place packet in Mailbox?
+  } 
+}
 
+void writeUdp(IPAddress remoteIP, uint16_t remotePort, const char* tBuffer) 
+{
       // send a reply to the IP address and port that sent us the packet we received
-      Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
-      Udp.write(ReplyBuffer);
-      Udp.endPacket();
+      Serial.print("Sending UDP msg to: ");
+      Serial.print(remoteIP);
+      Serial.print(" Port: ");
+      Serial.println(remotePort);
+      
+      if (!udpTx.beginPacket(remoteIP, remotePort)) {
+          Serial.println("Remote IP/Port error.");
+      } 
+
+      udpTx.write(tBuffer);
+
+      if (!udpTx.endPacket()) {
+          Serial.println("UDP packet sent error.");
+      }
+}
+
+void mountFS() 
+{
+    if(!LittleFS.begin()){
+        Serial.println("An Error has occurred while mounting SPIFFS");
+    } else {
+        Serial.println("LittleFS file system mounted");
+    }                
+}
+
+
+void initFS() {
+
+  File file = LittleFS.open(fLogin, "r");
+
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {
+    while (file.available()) {
+      char buf[32];
+      size_t bytesRead = file.readBytes(buf, sizeof(buf) - 1);
+      buf[bytesRead] = '\0';
+      Serial.print(buf);
+      yield();
+    }
+
+    file.close();
   }
+
+  LittleFS.end();
+
 }
 
 /****** setup tasks ******/
@@ -518,19 +577,22 @@ void mUpd()
 void setup() 
 {
   Serial.begin(460800);
+  delay(5000);
   Serial.println("Setup started.");
-
+  
+  mountFS();
+  
   // On Board LED heatbeat
   pinMode(LED_BUILTIN, OUTPUT);
+  initSPI();
   
   // Set UART for RS-232 interface
   // Configure MySerial0 on pins TX=D6 and RX=D7 
-  //SerialRS232.begin(BAUD, SERIAL_8N1,RX_PIN,TX_PIN);
-  //SerialRS232.onReceive(); TODO: set onRecive callback so no need to add in the polling loop)
+  // SerialRS232.onReceive(); TODO: set onRecive callback so no need to add in the polling loop)
+  SerialRS232.begin(BAUD, SERIAL_8N1,RX_PIN,TX_PIN);
   
- // Connect to WiFi network
+  // Connect to WiFi network
   initWifiAP();
-  //initWiFiServer();
   initWebServer();
   initEth();
 
@@ -574,11 +636,15 @@ void loop() {
       WiFi_WebApp.process(&client);
       client.stop();
   }
-*/
-  wserver.handleClient();
-  mUpd();
-  delay(1);
+  */
 
+  wserver.handleClient();
+  //readUdp();
+  //delay(2000);
+  //writeUdp(WindowsIP, WindowsPort, replyBuffer);
+  //delay(2000);
+  //spiCommand(0xBE);
+  
   if (shouldRestart) {
       delay(1000);
       ESP.restart();
