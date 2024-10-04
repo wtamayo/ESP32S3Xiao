@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html>
 <head>
 <style> 
@@ -60,38 +59,44 @@
 </head>
 
 <body>
-    <h1 align='center' color='white'> Upload fimrware update file (.bin) </h1>
-    <form class='form' id='myForm'>
-        <h1>Upload .bin Update File</h1>
+    <!--form class='form' id='myForm'-->
+    <form name='upForm' id='upForm'>
+        <h1 id=hInfo>Upload file to Server</h1>
         <input type='file' id='inpFile'><br>
         <button type='submit'>Upload File</button>
-    </form>"
+    </form>
+    <p id="dateTimeDisplay"></p>
     
     <script>
-    const myForm = document.getElementById('myForm');
+    const upForm = document.getElementById('upForm');
     const inpFile = document.getElementById('inpFile');
     
-    myForm.addEventListener('submit', e => {
+    upForm.addEventListener('submit', e => {
         e.preventDefault();
     
-        const endpoint = '/update';
+        const endpoint = '/save';
         const formData = new FormData();
         console.log(inpFile.files);
     
         formData.append('inpFile', inpFile.files[0]);
-    
+
+        var header = document.getElementById("hInfo");
+        // Change info header
+        header.innerText = "File uploading please wait..";
+        header.style.color = 'blue';
+
         fetch(endpoint, {
             method: 'post',
             body: formData
             }).then((response) => {
-                if (!response.ok) {
-                    return alert('File upload failed');
+                if (response.ok) {
+                    alert('File Uploaded');                              
                 } else {
-                    alert('Firmware update completed');
-                    location.reload();
-                }
+                    alert('File upload failed');
+                    return;
+                }            
             });
-        });
+    });        
     </script>
     
 </body>

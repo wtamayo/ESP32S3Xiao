@@ -27,6 +27,8 @@
 //  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
 //};
 
+void readFileFS(const char* filename); 
+
 // Xiao SPI PIN remapping SCK, MISO, MOSI, SS
 #define SCK_PIN    D8
 #define MISO_PIN   D9
@@ -49,7 +51,7 @@ static uint16_t WindowsPort = 9999;
 
 // buffers for receiving and sending data
 char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  // buffer to hold incoming packet,
-char replyBuffer[] = "ACK";        // a string to send back
+char replyBuffer[512] = "ACK";        // a string to send back
 
 // An EthernetUDP instance to let us send and receive packets over UDP
 EthernetUDP udpRx;
@@ -137,131 +139,24 @@ const char* passwordAP = "";
 //WiFiServer server(80);
 Application WiFi_WebApp;
 
-WebServer wserver(80);  // Create a web server on port 80 (HTTP)
+WebServer server(80);  // Create a web server on port 80 (HTTP)
 
 char expectHeader[20] {};
 bool shouldRestart = false;
 
 // Hardware
-HardwareSerial SerialRS232(0);     // UART (RS-232)
+HardwareSerial SerialRS232(0);               // UART (RS-232)
 // I2C
 // CAN
 
 /****** Files System (move) ******/
-
+#define SAV_MAX_SIZE_FS  (1048576)           // 1MB = 1048576, max 1500000.
 const char *fLogin  = "/server/login.html";
+const char *fIndex = "/server/index.html";
+const char *fUpdate = "/server/update.html";
 const char *fUpload = "/server/upload.html";
-const char *fController = "/stw/samplestw.hex";
-
-
-
-String style =
-"<style>#file-input,input{width:100%;height:44px;border-radius:4px;margin:10px auto;font-size:15px}"
-"input{background:#f1f1f1;border:0;padding:0 15px}body{background:#3498db;font-family:sans-serif;font-size:14px;color:#777}"
-"#file-input{padding:0;border:1px solid #ddd;line-height:44px;text-align:left;display:block;cursor:pointer}"
-"#bar,#prgbar{background-color:#f1f1f1;border-radius:10px}#bar{background-color:#3498db;width:0%;height:10px}"
-"form{background:#fff;max-width:258px;margin:75px auto;padding:30px;border-radius:5px;text-align:center}"
-".btn{background:#3498db;color:#fff;cursor:pointer}</style>";
-
-/*
-String loginIndex = 
-"<form name=loginForm>"
-"<h1>Couer Barge Login</h1>"
-"<input name=userid placeholder='User ID'> "
-"<input name=pwd placeholder=Password type=Password> "
-"<input type=submit onclick=check(this.form) class=btn value=Login></form>"
-"<script>"
-"function check(form) {"
-"if(form.userid.value=='AKBarge' && form.pwd.value=='admin')"
-"{window.open('/serverIndex')}"
-"else"
-"{alert('Error Password or Username')}"
-"}"
-"</script>" + style;
-
-String serverIndex = 
-"<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-"<input type='file' name='update' id='file' onchange='sub(this)' style=display:none>"
-"<label id='file-input' for='file'>   Choose file...</label>"
-"<input type='submit' class=btn value='Update'>"
-"<br><br>"
-"<div id='prg'></div>"
-"<br><div id='prgbar'><div id='bar'></div></div><br></form>"
-"<script>"
-"function sub(obj){"
-"var fileName = obj.value.split('\\\\');"
-"document.getElementById('file-input').innerHTML = '   '+ fileName[fileName.length-1];"
-"};"
-"$('form').submit(function(e){"
-"e.preventDefault();"
-"var form = $('#upload_form')[0];"
-"var data = new FormData(form);"
-"$.ajax({"
-"url: '/update',"
-"type: 'POST',"
-"data: data,"
-"contentType: false,"
-"processData:false,"
-"xhr: function() {"
-"var xhr = new window.XMLHttpRequest();"
-"xhr.upload.addEventListener('progress', function(evt) {"
-"if (evt.lengthComputable) {"
-"var per = evt.loaded / evt.total;"
-"$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-"$('#bar').css('width',Math.round(per*100) + '%');"
-"}"
-"}, false);"
-"return xhr;"
-"},"
-"success:function(d, s) {"
-"console.log('success!') "
-"},"
-"error: function (a, b, c) {"
-"}"
-"});"
-"});"
-"</script>" + style;
-*/
-
-String uploadIndex = 
-"<body>"
-//"<h1 align='center' color='white'> Upload fimrware update file (.bin) </h1>"
-"<form class='form' id='myForm'>"
-"<h1>Upload .bin Update File</h1>"
-"<input type='file' id='inpFile'><br>"
-"<button type='submit'>Upload File</button>"
-"</form>"
-
-"<script>"
-"const myForm = document.getElementById('myForm');"
-"const inpFile = document.getElementById('inpFile');"
-
-"myForm.addEventListener('submit', e => {"
-"e.preventDefault();"
-
-"const endpoint = '/update';"
-"const formData = new FormData();"
-"console.log(inpFile.files);"
-
-"formData.append('inpFile', inpFile.files[0]);"
-
-"fetch(endpoint, {"
-"method: 'post',"
-"body: formData"
-"}).then((response) => {"
-"if (!response.ok) {"
-"return alert('File upload failed');"
-"} else {"
-"alert('Firmware update completed');"
-"location.reload();"
-"}"
-"});"
-"});"
-"</script>"
-"</body>" + style;
-
-
+const char *fSave = "/save/stw_3cs.hex";
+bool fAppend = false;
 
 /****** Real Time Application Tasks ******/
 #if USING_RTOS_TASKS
@@ -336,8 +231,8 @@ void writerTask3(void *pvParameters ) {
 
 /****** loop tasks ******/
 
-void heartBeatTask(void *pvParameters ) {
-
+void heartBeatTask(void *pvParameters ) 
+{
   while (1) {
     // LED
     digitalWrite(LED_BUILTIN, HIGH);
@@ -359,47 +254,76 @@ void initWifiAP()
          delay(1000);
     }
   }
-  Serial.println("mDNS responder started");
-    
+  Serial.println("mDNS responder started");    
 }
 
 
-void hServerLogin() {
-  wserver.sendHeader("Connection", "close");  
+void hServerLogin() 
+{
+  server.sendHeader("Connection", "close");  
   // inline read file
   File file = LittleFS.open(fLogin, "r");
   if (!file) {
     Serial.println("could not open file for reading");
   } else {
     while (file.available()) {      
-      wserver.send(200, "text/html", file.readString());         
+      server.send(200, "text/html", file.readString());         
     }
     file.close();
   }
 }
 
-void hServerIndex() {
-  wserver.sendHeader("Connection", "close");
-  wserver.send(200, "text/html", fUpload);
+void hServerIndex() 
+{
+  server.sendHeader("Connection", "close");
+  // inline read file
+  File file = LittleFS.open(fIndex, "r");
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {
+    while (file.available()) {      
+      server.send(200, "text/html", file.readString());         
+    }
+    file.close();
+  }
 }
 
-void hServerUpdate() {
-  wserver.sendHeader("Connection", "close");
-  wserver.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+void hServerUpdate() 
+{
+  server.sendHeader("Connection", "close");
+   // inline read file
+  File file = LittleFS.open(fUpdate, "r");
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {
+    while (file.available()) {      
+      server.send(200, "text/html", file.readString());         
+    }
+    file.close();
+  }
+}
+
+void hServerUpdatedEnd() 
+{
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
   ESP.restart();
 }
 
-void hServerUpload() {
-  HTTPUpload& upload = wserver.upload();
+void hServerUpdatedStart() 
+{
+  HTTPUpload& upload = server.upload();
+  Serial.println("Updating..");
+ 
   if (upload.status == UPLOAD_FILE_START) {
       Serial.printf("Update: %s\n", upload.filename.c_str());
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
         Update.printError(Serial);
       }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-      /* flashing firmware to ESP*/
+      /* flashing firmware to ESP*/      
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-        Update.printError(Serial);
+          Update.printError(Serial);
       }
   } else if (upload.status == UPLOAD_FILE_END) {
       if (Update.end(true)) { //true to set the size to the current progress
@@ -410,12 +334,114 @@ void hServerUpload() {
   }
 }
 
+
+void hServerUpload() 
+{
+  server.sendHeader("Connection", "close");
+   // inline read file
+  File file = LittleFS.open(fUpload, "r");
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {
+    while (file.available()) {      
+      server.send(200, "text/html", file.readString());         
+    }
+    file.close();
+  }
+}
+
+void hServerUploadEnd() 
+{
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+  // Verify the file was written
+  readFileFS(fSave);
+  //writeFileUdp(fSave);  // This may be CAN instead
+}
+
+// Attempt to delete the file
+bool deleteFileFS(const char* filePath) 
+{
+  if (LittleFS.exists(filePath)) {    
+    if (LittleFS.remove(filePath)) {
+      Serial.println("File deleted successfully");
+      return true;
+    } else {
+      Serial.println("Failed to delete the file.");
+    }
+  } else {
+    Serial.println("File does not exist.");
+  }
+  return false;
+}
+
+// upload a file in to a flash file that is a multiple of 1436 bytes buffer 
+void hServerUploadStart() 
+{
+  HTTPUpload& upload = server.upload();
+  static size_t accStream = 0;
+  static size_t fStreamSize = 0;
+
+  // delete old file and clear upload buffer
+  if (!fAppend) {
+      deleteFileFS(fSave); 
+      fStreamSize = 0;   
+      accStream = 0;
+      fAppend = true;      
+  }
+
+  File file = LittleFS.open(fSave, "a");
+  
+  if (!file) {
+      Serial.println("could not open file for writting");
+      return;
+  }
+  
+  if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Uploading: %s\n", upload.filename.c_str());
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+      // The actual usefull data in the file will be upload.totalSize
+      int bufferSize = sizeof(upload.buf);
+      accStream += bufferSize;
+
+      // Dont try to write beyond available file size.
+      if (accStream > SAV_MAX_SIZE_FS) {
+          Serial.println("Upload file size " + String(accStream) + " larger than flash space " + String(SAV_MAX_SIZE_FS));          
+          // should we delete the partial file?
+          file.close();     
+          upload.status = UPLOAD_FILE_ABORTED;           
+          return;
+      } else {
+          // May have to sanitize the last buffer upload.buf
+          fStreamSize += file.write((const uint8_t*)upload.buf, bufferSize);
+          memset(upload.buf, '\0', sizeof(upload.buf));          
+      }
+
+      Serial.println("Upload buffer written to file, file size: " + String(fStreamSize));
+
+  } else if (upload.status == UPLOAD_FILE_END) {
+      Serial.printf("Upload of %u bytes completed \n", fStreamSize);
+      fAppend = false;
+      fStreamSize = 0;   
+      accStream = 0;           
+      file.close();      
+  }
+}
+
+
 void initWebServer()
 {
-  wserver.on("/", HTTP_GET, hServerLogin); 
-  wserver.on("/index", HTTP_GET, hServerIndex);
-  wserver.on("/update", HTTP_POST, hServerUpdate, hServerUpload);
-  wserver.begin();
+  server.on("/", HTTP_GET, hServerLogin);
+  server.on("/index", HTTP_GET, hServerIndex);  // There is no /index until there is a portal 
+  
+  // OTA Flash Update
+  server.on("/update", HTTP_GET, hServerUpdate);
+  server.on("/flash", HTTP_POST, hServerUpdatedEnd, hServerUpdatedStart);
+
+  // Upload a file and save to file-system
+  server.on("/upload", HTTP_GET, hServerUpload);
+  server.on("/save", HTTP_POST, hServerUploadEnd, hServerUploadStart);
+  server.begin();
 }
 
 
@@ -540,6 +566,39 @@ void writeUdp(IPAddress remoteIP, uint16_t remotePort, const char* tBuffer)
       }
 }
 
+
+// The file size may be larger than the data in it.
+void readFileFS(const char* filename) 
+{
+   // inline read file
+  File file = LittleFS.open(filename, "r");
+  int size = file.size();
+  //char buffer[dataLimit];
+  size_t bytesRead = 0;
+
+  Serial.println("Reading flashed file:" + String(filename) + " of size:" + String(size));
+
+  if (!file) {
+    Serial.println("could not open file for reading");
+  } else {      
+      while (file.available()) {             
+        Serial.printf("%X ", file.read());         // Process file here CAN/UDP    
+        bytesRead++;          
+        //if (bytesRead > SAV_MAX_SIZE_FS) break;        
+        //bytesRead = file.readBytes(buffer, sizeof(buffer)-1);             
+        //Serial.println(file.readString());
+        //for (int i=0; i<(bytesRead-1); i++) {
+        //    Serial.printf("%X", buffer[i]); 
+        //    if (!(i % 31)) Serial.println();           
+        //}        
+        // yield();
+      }
+    Serial.println("Amount of data in file:" + String(bytesRead));    
+    file.close();
+  }
+}
+
+
 void mountFS() 
 {
     if(!LittleFS.begin()){
@@ -550,41 +609,38 @@ void mountFS()
 }
 
 
-void initFS() {
 
-  File file = LittleFS.open(fLogin, "r");
-
-  if (!file) {
-    Serial.println("could not open file for reading");
-  } else {
-    while (file.available()) {
-      char buf[32];
-      size_t bytesRead = file.readBytes(buf, sizeof(buf) - 1);
-      buf[bytesRead] = '\0';
-      Serial.print(buf);
-      yield();
-    }
-
-    file.close();
-  }
-
-  LittleFS.end();
-
-}
+// void initFS() {
+//   File file = LittleFS.open(fLogin, "r");
+//   if (!file) {
+//     Serial.println("could not open file for reading");
+//   } else {
+//     while (file.available()) {
+//       char buf[32];
+//       size_t bytesRead = file.readBytes(buf, sizeof(buf) - 1);
+//       buf[bytesRead] = '\0';
+//       Serial.print(buf);
+//       yield();
+//     }
+//     file.close();
+//   }
+//   LittleFS.end();
+// }
 
 /****** setup tasks ******/
 
 void setup() 
 {
   Serial.begin(460800);
-  delay(5000);
+  delay(1000);
   Serial.println("Setup started.");
   
   mountFS();
   
+  
   // On Board LED heatbeat
   pinMode(LED_BUILTIN, OUTPUT);
-  initSPI();
+  //initSPI();
   
   // Set UART for RS-232 interface
   // Configure MySerial0 on pins TX=D6 and RX=D7 
@@ -594,8 +650,11 @@ void setup()
   // Connect to WiFi network
   initWifiAP();
   initWebServer();
-  initEth();
+  //initEth();
+  readFileFS(fSave);
 
+
+  
 
 #if USING_RTOS_MUTEX
   sLock = xSemaphoreCreateMutex();
@@ -629,21 +688,13 @@ void setup()
 /****** loop tasks ******/
 void loop() {
 
-  /*
-  WiFiClient client = server.available();
-    
-  if (client.connected()) {
-      WiFi_WebApp.process(&client);
-      client.stop();
-  }
-  */
-
-  wserver.handleClient();
+  server.handleClient();
   //readUdp();
   //delay(2000);
   //writeUdp(WindowsIP, WindowsPort, replyBuffer);
   //delay(2000);
   //spiCommand(0xBE);
+
   
   if (shouldRestart) {
       delay(1000);
